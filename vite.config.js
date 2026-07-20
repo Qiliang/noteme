@@ -33,8 +33,13 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+  // Tauri webviews support modern JS; needed for deps that use top-level await.
+  build: {
+    target: "es2022",
+  },
   optimizeDeps: {
     exclude: ["satteri", "@bruits/satteri-wasm32-wasi"],
+    include: ["react", "react-dom", "@excalidraw/excalidraw"],
   },
   worker: {
     format: "es",

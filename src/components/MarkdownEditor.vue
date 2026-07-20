@@ -6,13 +6,20 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import { markdown } from "@codemirror/lang-markdown";
 import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 import { savePastedImage } from "../lib/markdown.js";
+import { excalidrawFoldExtension } from "../lib/excalidrawFold.js";
 
 const props = defineProps({
   modelValue: { type: String, default: "" },
   notePath: { type: String, default: "" },
 });
 
-const emit = defineEmits(["update:modelValue", "image-saved", "status", "error"]);
+const emit = defineEmits([
+  "update:modelValue",
+  "image-saved",
+  "status",
+  "error",
+  "open-excalidraw",
+]);
 
 const host = ref(null);
 /** @type {import('vue').Ref<EditorView | null>} */
@@ -24,7 +31,7 @@ function emitDoc(viewInstance) {
   emit("update:modelValue", viewInstance.state.doc.toString());
 }
 
-async function handlePaste(event, viewInstance) {
+function handlePaste(event, viewInstance) {
   const items = event.clipboardData?.items;
   if (!items || !props.notePath) return false;
 
@@ -33,21 +40,25 @@ async function handlePaste(event, viewInstance) {
     const blob = item.getAsFile();
     if (!blob) continue;
 
+    // Must return a boolean synchronously: a Promise is truthy and would
+    // block CodeMirror's default text paste for every clipboard event.
     event.preventDefault();
-    try {
-      emit("status", "保存图片…");
-      const { markdown: md, path } = await savePastedImage(props.notePath, blob);
-      const { from, to } = viewInstance.state.selection.main;
-      const insert = `\n${md}\n`;
-      viewInstance.dispatch({
-        changes: { from, to, insert },
-        selection: { anchor: from + insert.length },
-      });
-      emit("image-saved", path);
-      emit("status", "图片已插入");
-    } catch (e) {
-      emit("error", typeof e === "string" ? e : e?.message || String(e));
-    }
+    void (async () => {
+      try {
+        emit("status", "保存图片…");
+        const { markdown: md, path } = await savePastedImage(props.notePath, blob);
+        const { from, to } = viewInstance.state.selection.main;
+        const insert = `\n${md}\n`;
+        viewInstance.dispatch({
+          changes: { from, to, insert },
+          selection: { anchor: from + insert.length },
+        });
+        emit("image-saved", path);
+        emit("status", "图片已插入");
+      } catch (e) {
+        emit("error", typeof e === "string" ? e : e?.message || String(e));
+      }
+    })();
     return true;
   }
   return false;
@@ -63,6 +74,9 @@ function createState(doc) {
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       cmPlaceholder("开始写 Markdown…"),
       EditorView.lineWrapping,
+      excalidrawFoldExtension((path) => {
+        emit("open-excalidraw", path);
+      }),
       EditorView.updateListener.of((u) => {
         if (u.docChanged) emitDoc(u.view);
       }),
@@ -91,6 +105,34 @@ function createState(doc) {
         },
         "&.cm-focused": {
           outline: "none",
+        },
+        ".cm-excalidraw-widget": {
+          display: "block",
+          width: "100%",
+          boxSizing: "border-box",
+          margin: "0.35rem 0",
+          padding: "0.55rem 0.75rem",
+          border: "1px solid #c5ddd7",
+          borderRadius: "6px",
+          background: "linear-gradient(180deg, #f3faf8 0%, #e8f4f0 100%)",
+          color: "#0f6b5c",
+          fontFamily:
+            '"IBM Plex Sans", "SF Pro Text", "Segoe UI", sans-serif',
+          fontSize: "13px",
+          fontWeight: "600",
+          textAlign: "left",
+          cursor: "pointer",
+        },
+        ".cm-excalidraw-widget:hover": {
+          borderColor: "#0f6b5c",
+          background: "linear-gradient(180deg, #e8f4f0 0%, #dceee8 100%)",
+        },
+        ".cm-excalidraw-ref": {
+          textDecoration: "underline",
+          textDecorationStyle: "dotted",
+          textDecorationColor: "#0f6b5c",
+          textUnderlineOffset: "3px",
+          cursor: "pointer",
         },
       }),
     ],
@@ -129,7 +171,51 @@ function focus() {
   view.value?.focus();
 }
 
-defineExpose({ focus });
+/**
+ * @param {string} text
+ * @returns {boolean} false when the editor view is not ready
+ */
+function insertAtCursor(text) {
+  const v = view.value;
+  if (!v) return false;
+  const { from, to } = v.state.selection.main;
+  const insert = text.startsWith("\n") ? text : `\n${text}`;
+  const withTrailing = insert.endsWith("\n") ? insert : `${insert}\n`;
+  v.dispatch({
+    changes: { from, to, insert: withTrailing },
+    selection: { anchor: from + withTrailing.length },
+  });
+  v.focus();
+  return true;
+}
+
+/** @returns {{ from: number, to: number, text: string } | null} */
+function getSelection() {
+  const v = view.value;
+  if (!v) return null;
+  const { from, to } = v.state.selection.main;
+  return { from, to, text: v.state.doc.sliceString(from, to) };
+}
+
+/**
+ * Replace current selection (or insert at cursor if empty).
+ * @param {string} text
+ * @returns {boolean}
+ */
+function replaceSelection(text) {
+  const v = view.value;
+  if (!v) return false;
+  const { from, to } = v.state.selection.main;
+  const insert = text ?? "";
+  v.dispatch({
+    changes: { from, to, insert },
+    selection: { anchor: from + insert.length },
+  });
+  v.focus();
+  return true;
+}
+
+defineExpose({ focus, insertAtCursor, getSelection, replaceSelection });
 </script>
 
 <template>
